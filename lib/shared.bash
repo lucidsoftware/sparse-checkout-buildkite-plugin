@@ -152,6 +152,87 @@ array_join() {
 }
 
 # ============================================================================
+# Git mirror utilities
+# ============================================================================
+
+# Matches the repository-to-directory conversion used by buildkite-agent.
+git_mirror_dir_for_repository() {
+  printf '%s\n' "${1//[^[:alnum:]]/-}"
+}
+
+# Finds a mirror prepared by buildkite-agent without modifying it. A checkout
+# plugin replaces the agent's default checkout phase, so the agent exports
+# BUILDKITE_GIT_MIRRORS_PATH but never gets far enough to populate
+# BUILDKITE_REPO_MIRROR for the plugin.
+#
+# On success, sets GIT_MIRROR_DIR to the usable mirror path.
+resolve_git_mirror() {
+  local repository="$1"
+  local mirror_path="${BUILDKITE_REPO_MIRROR:-}"
+
+  export GIT_MIRROR_DIR=""
+
+  if [[ -n "${mirror_path}" ]]; then
+    if [[ -d "${mirror_path}/objects" ]]; then
+      export GIT_MIRROR_DIR="${mirror_path}"
+      return 0
+    fi
+
+    log_warning "Configured git mirror ${mirror_path} has no objects directory; cloning without it"
+    return 1
+  fi
+
+  if [[ -z "${BUILDKITE_GIT_MIRRORS_PATH:-}" ]]; then
+    return 1
+  fi
+
+  mirror_path="${BUILDKITE_GIT_MIRRORS_PATH}/$(git_mirror_dir_for_repository "${repository}")"
+  if [[ ! -d "${mirror_path}/objects" ]]; then
+    log_info "No existing git mirror found at ${mirror_path}; cloning without it"
+    return 1
+  fi
+
+  export GIT_MIRROR_DIR="${mirror_path}"
+}
+
+# Acquires the same update lock used by buildkite-agent before reading a mirror
+# for a local clone. This prevents a concurrent mirror fetch or garbage
+# collection from racing with Git while it creates hardlinks to mirror objects.
+acquire_git_mirror_update_lock() {
+  local mirror_path="$1"
+  local timeout="${BUILDKITE_GIT_MIRRORS_LOCK_TIMEOUT:-300}"
+  local lock_file="${mirror_path}.updatelockf"
+  local started
+  local now
+
+  if ! command_exists flock; then
+    log_warning "flock is unavailable; cloning from the remote instead of the git mirror"
+    return 1
+  fi
+
+  exec {GIT_MIRROR_LOCK_FD}>"${lock_file}"
+  started="$(date +%s)"
+  while ! flock -n "${GIT_MIRROR_LOCK_FD}"; do
+    now="$(date +%s)"
+    if ((now - started >= timeout)); then
+      exec {GIT_MIRROR_LOCK_FD}>&-
+      unset GIT_MIRROR_LOCK_FD
+      log_warning "Timed out waiting for git mirror update lock ${lock_file}; cloning from the remote instead"
+      return 1
+    fi
+    sleep 1
+  done
+}
+
+release_git_mirror_update_lock() {
+  if [[ -n "${GIT_MIRROR_LOCK_FD:-}" ]]; then
+    flock -u "${GIT_MIRROR_LOCK_FD}" 2>/dev/null || true
+    exec {GIT_MIRROR_LOCK_FD}>&-
+    unset GIT_MIRROR_LOCK_FD
+  fi
+}
+
+# ============================================================================
 # String utilities
 # ============================================================================
 

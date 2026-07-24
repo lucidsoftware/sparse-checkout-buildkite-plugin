@@ -61,18 +61,41 @@ log_info "Creating sparse-checkout with paths: ${CHECKOUT_PATHS[*]}"
 validate_required_config "BUILDKITE_REPO" "${BUILDKITE_REPO:-}"
 validate_required_config "BUILDKITE_COMMIT" "${BUILDKITE_COMMIT:-}"
 
+GIT_MIRROR_AVAILABLE="false"
+if resolve_git_mirror "${BUILDKITE_REPO}"; then
+  log_info "Using git mirror ${GIT_MIRROR_DIR}"
+  GIT_MIRROR_AVAILABLE="true"
+fi
+
 # clone the repo without checking out files if it does not exist already
 if [[ ! -d .git ]]; then
-  log_info "Cloning repository ${BUILDKITE_REPO}"
-  if ! git clone \
-    --depth 1 \
-    --filter=blob:none \
-    --no-checkout \
-    ${BUILDKITE_REPO_MIRROR:+--reference "$BUILDKITE_REPO_MIRROR"} \
-    -v \
-    "${BUILDKITE_REPO}" .; then
-    log_error "Failed to clone repository"
-    exit 1
+  if [[ "${GIT_MIRROR_AVAILABLE}" = "true" ]] && acquire_git_mirror_update_lock "${GIT_MIRROR_DIR}"; then
+    log_info "Cloning repository locally from git mirror ${GIT_MIRROR_DIR}"
+    # The mirror and checkout may be on different filesystems, so hardlinks
+    # cannot be used. --shared uses an alternates file instead and avoids
+    # copying the mirror's full object database into the sparse checkout.
+    if ! git clone --shared --no-checkout -v "${GIT_MIRROR_DIR}" .; then
+      release_git_mirror_update_lock
+      log_error "Failed to clone repository from git mirror"
+      exit 1
+    fi
+    release_git_mirror_update_lock
+
+    if ! git remote set-url origin "${BUILDKITE_REPO}"; then
+      log_error "Failed to set repository origin to ${BUILDKITE_REPO}"
+      exit 1
+    fi
+  else
+    log_info "Cloning repository ${BUILDKITE_REPO}"
+    if ! git clone \
+      --depth 1 \
+      --filter=blob:none \
+      --no-checkout \
+      -v \
+      "${BUILDKITE_REPO}" .; then
+      log_error "Failed to clone repository"
+      exit 1
+    fi
   fi
   log_success "Repository cloned successfully"
 fi
@@ -165,7 +188,12 @@ if [[ "${BUILDKITE_PULL_REQUEST_USING_MERGE_REFSPEC:-false}" = "true" ]] \
   fi
 fi
 
-if [[ "${USE_MERGE_REFSPEC}" != "true" ]]; then
+if [[ "${USE_MERGE_REFSPEC}" != "true" ]] \
+  && [[ "${GIT_MIRROR_AVAILABLE}" = "true" ]] \
+  && [[ "${BUILDKITE_COMMIT}" != "HEAD" ]] \
+  && git cat-file -e "${BUILDKITE_COMMIT}^{commit}" 2>/dev/null; then
+  log_success "Commit ${BUILDKITE_COMMIT} is already available from the git mirror; skipping fetch"
+elif [[ "${USE_MERGE_REFSPEC}" != "true" ]]; then
   if [[ ${BUILDKITE_COMMIT} = "HEAD" ]]; then
     FETCH_FLAGS+=("${BUILDKITE_BRANCH}")
   else

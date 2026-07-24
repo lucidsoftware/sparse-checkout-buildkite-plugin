@@ -13,6 +13,58 @@ setup() {
   export BUILDKITE_REPO="git@github.com:example/repo.git"
 }
 
+@test "Clone locally from an existing git mirror and skip an unnecessary fetch" {
+  local plugin_dir="$PWD"
+  local checkout_dir="${BATS_TEST_TMPDIR}/checkout"
+  local mirror_dir="${BATS_TEST_TMPDIR}/mirror"
+  mkdir -p "${checkout_dir}" "${mirror_dir}/objects"
+
+  export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_SKIP_SSH_KEYSCAN="true"
+  export BUILDKITE_REPO_MIRROR="${mirror_dir}"
+
+  stub git \
+    "clone --shared --no-checkout -v ${mirror_dir} . : mkdir .git; echo 'local mirror clone'" \
+    "remote set-url origin ${BUILDKITE_REPO} : echo 'origin updated'" \
+    "clean -ffxdq : echo 'git clean'" \
+    "cat-file -e ${BUILDKITE_COMMIT}^{commit} : true" \
+    "sparse-checkout set * * : echo 'git sparse-checkout'" \
+    "checkout ${BUILDKITE_COMMIT} : echo 'checkout'"
+
+  cd "${checkout_dir}"
+  run "${plugin_dir}"/hooks/checkout
+
+  assert_success
+  assert_output --partial "local mirror clone"
+  assert_output --partial "origin updated"
+  assert_output --partial "already available from the git mirror; skipping fetch"
+
+  unstub git
+}
+
+@test "Reuse an existing mirror-backed checkout without fetching an available commit" {
+  local plugin_dir="$PWD"
+  local checkout_dir="${BATS_TEST_TMPDIR}/checkout"
+  local mirror_dir="${BATS_TEST_TMPDIR}/mirror"
+  mkdir -p "${checkout_dir}/.git" "${mirror_dir}/objects"
+
+  export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_SKIP_SSH_KEYSCAN="true"
+  export BUILDKITE_REPO_MIRROR="${mirror_dir}"
+
+  stub git \
+    "clean -ffxdq : echo 'git clean'" \
+    "cat-file -e ${BUILDKITE_COMMIT}^{commit} : true" \
+    "sparse-checkout set * * : echo 'git sparse-checkout'" \
+    "checkout ${BUILDKITE_COMMIT} : echo 'checkout'"
+
+  cd "${checkout_dir}"
+  run "${plugin_dir}"/hooks/checkout
+
+  assert_success
+  assert_output --partial "already available from the git mirror; skipping fetch"
+
+  unstub git
+}
+
 @test "Skip ssh-keyscan when option provided" {
   export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_SKIP_SSH_KEYSCAN="true"
 
