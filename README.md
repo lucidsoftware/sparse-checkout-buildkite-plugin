@@ -26,7 +26,7 @@ Whether to skip ssh-keyscan step. This will skip adding each ssh public key into
 
 #### `clean_checkout` ('true' or 'false')
 
-Whether to perform aggressive repository cleanup before checkout. This option handles scenarios where interrupted or cancelled jobs leave the git repository in a corrupted state that would prevent checkout. When enabled, it removes git lock files, resets the repository with `git reset --hard HEAD`, and cleans all untracked files with `git clean -ffxdq`.
+Whether to perform aggressive repository cleanup around checkout. This option handles scenarios where interrupted or cancelled jobs leave the git repository in a corrupted state that would prevent checkout. For reused repositories it removes git lock files, resets with `git reset --hard HEAD`, and cleans untracked files before changing sparse patterns. For fresh clones it waits until sparse checkout is configured and checked out before cleaning, avoiding materialization of the full working tree.
 
 **What it fixes:**
 - Stale git lock files (from interrupted operations)

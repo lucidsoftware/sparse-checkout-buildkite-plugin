@@ -13,7 +13,7 @@ setup() {
   export BUILDKITE_REPO="git@github.com:example/repo.git"
 }
 
-@test "Clone locally from an existing git mirror and skip an unnecessary fetch" {
+@test "Clone from the remote using an existing git mirror as a reference" {
   local plugin_dir="$PWD"
   local checkout_dir="${BATS_TEST_TMPDIR}/checkout"
   local mirror_dir="${BATS_TEST_TMPDIR}/mirror"
@@ -23,10 +23,8 @@ setup() {
   export BUILDKITE_REPO_MIRROR="${mirror_dir}"
 
   stub git \
-    "clone --shared --no-checkout -v ${mirror_dir} . : mkdir .git; echo 'local mirror clone'" \
-    "remote set-url origin ${BUILDKITE_REPO} : echo 'origin updated'" \
-    "clean -ffxdq : echo 'git clean'" \
-    "cat-file -e ${BUILDKITE_COMMIT}^{commit} : true" \
+    "clone --no-checkout --reference ${mirror_dir} -v ${BUILDKITE_REPO} . : mkdir .git; echo 'reference mirror clone'" \
+    "fetch origin ${BUILDKITE_COMMIT} : echo 'git fetch'" \
     "sparse-checkout set * * : echo 'git sparse-checkout'" \
     "checkout ${BUILDKITE_COMMIT} : echo 'checkout'"
 
@@ -34,14 +32,43 @@ setup() {
   run "${plugin_dir}"/hooks/checkout
 
   assert_success
-  assert_output --partial "local mirror clone"
-  assert_output --partial "origin updated"
-  assert_output --partial "already available from the git mirror; skipping fetch"
+  assert_output --partial "reference mirror clone"
+  assert_output --partial "git fetch"
+  assert_output --partial "Cloning repository using reference mirror ${mirror_dir}"
 
   unstub git
 }
 
-@test "Reuse an existing mirror-backed checkout without fetching an available commit" {
+@test "Clean checkout does not reset a fresh clone before sparse checkout" {
+  local plugin_dir="$PWD"
+  local checkout_dir="${BATS_TEST_TMPDIR}/checkout"
+  local mirror_dir="${BATS_TEST_TMPDIR}/mirror"
+  mkdir -p "${checkout_dir}" "${mirror_dir}/objects"
+
+  export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_SKIP_SSH_KEYSCAN="true"
+  export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_CLEAN_CHECKOUT="true"
+  export BUILDKITE_REPO_MIRROR="${mirror_dir}"
+
+  stub git \
+    "clone --no-checkout --reference ${mirror_dir} -v ${BUILDKITE_REPO} . : mkdir .git; echo 'reference mirror clone'" \
+    "fetch origin ${BUILDKITE_COMMIT} : echo 'git fetch'" \
+    "sparse-checkout set * * : echo 'git sparse-checkout'" \
+    "checkout --force ${BUILDKITE_COMMIT} : echo 'checkout'" \
+    "clean -ffxdq : echo 'git clean after checkout'"
+
+  cd "${checkout_dir}"
+  run "${plugin_dir}"/hooks/checkout
+
+  assert_success
+  refute_output --partial "resetting repository state"
+  refute_output --partial "git reset"
+  assert_output --partial "Clean checkout enabled - cleaning repository after checkout"
+  assert_output --partial "git clean after checkout"
+
+  unstub git
+}
+
+@test "Reuse an existing checkout and fetch the requested commit" {
   local plugin_dir="$PWD"
   local checkout_dir="${BATS_TEST_TMPDIR}/checkout"
   local mirror_dir="${BATS_TEST_TMPDIR}/mirror"
@@ -52,7 +79,7 @@ setup() {
 
   stub git \
     "clean -ffxdq : echo 'git clean'" \
-    "cat-file -e ${BUILDKITE_COMMIT}^{commit} : true" \
+    "fetch origin ${BUILDKITE_COMMIT} : echo 'git fetch'" \
     "sparse-checkout set * * : echo 'git sparse-checkout'" \
     "checkout ${BUILDKITE_COMMIT} : echo 'checkout'"
 
@@ -60,7 +87,7 @@ setup() {
   run "${plugin_dir}"/hooks/checkout
 
   assert_success
-  assert_output --partial "already available from the git mirror; skipping fetch"
+  assert_output --partial "git fetch"
 
   unstub git
 }
@@ -69,7 +96,7 @@ setup() {
   export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_SKIP_SSH_KEYSCAN="true"
 
   stub git "clean \* : echo 'git clean'"
-  stub git "fetch --depth 1 origin \* : echo 'git fetch'"
+  stub git "fetch origin \* : echo 'git fetch'"
   stub git "sparse-checkout set \* \* : echo 'git sparse-checkout'" 
   stub git "checkout \* : echo 'checkout'"
 
@@ -86,7 +113,7 @@ setup() {
 
   stub ssh-keyscan "\* : echo 'keyscan'"
   stub git "clean \* : echo 'git clean'"
-  stub git "fetch --depth 1 origin \* : echo 'git fetch'"
+  stub git "fetch origin \* : echo 'git fetch'"
   stub git "sparse-checkout set \* \* : echo 'git sparse-checkout'"
   stub git "checkout \* : echo 'checkout'"
 
@@ -105,7 +132,7 @@ setup() {
 
   stub ssh-keyscan "\* : echo 'keyscan'"
   stub git "clean \* : echo 'git clean'"
-  stub git "fetch --depth 1 origin \* : echo 'git fetch'"
+  stub git "fetch origin \* : echo 'git fetch'"
   stub git "sparse-checkout set \* \* : echo 'git sparse-checkout'"
   stub git "checkout \* : echo 'checkout'"
 
@@ -122,7 +149,7 @@ setup() {
   unset BUILDKITE_REPO_SSH_HOST
 
   stub git "clean \* : echo 'git clean'"
-  stub git "fetch --depth 1 origin \* : echo 'git fetch'"
+  stub git "fetch origin \* : echo 'git fetch'"
   stub git "sparse-checkout set \* \* : echo 'git sparse-checkout'"
   stub git "checkout \* : echo 'checkout'"
 
@@ -141,7 +168,7 @@ setup() {
 
   stub ssh-keyscan "* : echo 'keyscan'"
   stub git "clean * : echo 'git clean'"
-  stub git "fetch --prune --verbose --depth 1 origin * : echo 'git fetch with flags'"
+  stub git "fetch --prune --verbose origin * : echo 'git fetch with flags'"
   stub git "sparse-checkout set * * : echo 'git sparse-checkout'"
   stub git "checkout * : echo 'checkout'"
 
@@ -159,7 +186,7 @@ setup() {
 
   stub ssh-keyscan "* : echo 'keyscan'"
   stub git "clean -ffxdq : echo 'git clean normal'"
-  stub git "fetch --depth 1 origin * : echo 'git fetch'"
+  stub git "fetch origin * : echo 'git fetch'"
   stub git "sparse-checkout set * * : echo 'git sparse-checkout'"
   stub git "checkout * : echo 'checkout'"
 
@@ -179,9 +206,9 @@ setup() {
   stub ssh-keyscan "* : echo 'keyscan'"
   stub git "reset --hard HEAD : echo 'git reset hard'"
   stub git "clean -ffxdq : echo 'git clean aggressive'"
-  stub git "fetch --depth 1 origin * : echo 'git fetch'"
+  stub git "fetch origin * : echo 'git fetch'"
   stub git "sparse-checkout set * * : echo 'git sparse-checkout'"
-  stub git "checkout * : echo 'checkout'"
+  stub git "checkout --force * : echo 'checkout'"
 
   run "$PWD"/hooks/checkout
 
@@ -202,7 +229,7 @@ setup() {
 
   stub ssh-keyscan "* : echo 'keyscan'"
   stub git "clean * : echo 'git clean'"
-  stub git "fetch --depth 1 origin refs/pull/123/merge : echo 'git fetch merge refspec'"
+  stub git "fetch origin refs/pull/123/merge : echo 'git fetch merge refspec'"
   stub git "sparse-checkout set * * : echo 'git sparse-checkout'"
   stub git "checkout FETCH_HEAD : echo 'checkout fetch_head'"
 
@@ -223,7 +250,7 @@ setup() {
 
   stub ssh-keyscan "* : echo 'keyscan'"
   stub git "clean * : echo 'git clean'"
-  stub git "fetch --depth 1 origin refs/pull/456/merge : echo 'git fetch merge refspec'"
+  stub git "fetch origin refs/pull/456/merge : echo 'git fetch merge refspec'"
   stub git "sparse-checkout set * * : echo 'git sparse-checkout'"
   stub git "checkout FETCH_HEAD : echo 'checkout fetch_head'"
 
@@ -248,9 +275,9 @@ setup() {
     "5 : true"
   stub git \
     "clean * : echo 'git clean'" \
-    "fetch --depth 1 origin refs/pull/123/merge : echo \"fatal: couldn't find remote ref refs/pull/123/merge\" >&2; exit 1" \
-    "fetch --depth 1 origin refs/pull/123/merge : echo \"fatal: couldn't find remote ref refs/pull/123/merge\" >&2; exit 1" \
-    "fetch --depth 1 origin refs/pull/123/merge : echo 'git fetch merge refspec'" \
+    "fetch origin refs/pull/123/merge : echo \"fatal: couldn't find remote ref refs/pull/123/merge\" >&2; exit 1" \
+    "fetch origin refs/pull/123/merge : echo \"fatal: couldn't find remote ref refs/pull/123/merge\" >&2; exit 1" \
+    "fetch origin refs/pull/123/merge : echo 'git fetch merge refspec'" \
     "sparse-checkout set * * : echo 'git sparse-checkout'" \
     "checkout FETCH_HEAD : echo 'checkout fetch_head'"
 
@@ -274,7 +301,7 @@ setup() {
 
   stub ssh-keyscan "* : echo 'keyscan'"
   stub git "clean * : echo 'git clean'"
-  stub git "fetch --depth 1 origin abc123 : echo 'git fetch commit'"
+  stub git "fetch origin abc123 : echo 'git fetch commit'"
   stub git "sparse-checkout set * * : echo 'git sparse-checkout'"
   stub git "checkout abc123 : echo 'checkout commit'"
 
@@ -295,7 +322,7 @@ setup() {
 
   stub ssh-keyscan "* : echo 'keyscan'"
   stub git "clean * : echo 'git clean'"
-  stub git "fetch --depth 1 origin abc123 : echo 'git fetch commit'"
+  stub git "fetch origin abc123 : echo 'git fetch commit'"
   stub git "sparse-checkout set * * : echo 'git sparse-checkout'"
   stub git "checkout abc123 : echo 'checkout commit'"
 
@@ -315,9 +342,9 @@ setup() {
   stub ssh-keyscan "* : echo 'keyscan'"
   stub git "reset --hard HEAD : exit 1"
   stub git "clean -ffxdq : echo 'git clean'"
-  stub git "fetch --depth 1 origin * : echo 'git fetch'"
+  stub git "fetch origin * : echo 'git fetch'"
   stub git "sparse-checkout set * * : echo 'git sparse-checkout'"
-  stub git "checkout * : echo 'checkout'"
+  stub git "checkout --force * : echo 'checkout'"
 
   run "$PWD"/hooks/checkout
 

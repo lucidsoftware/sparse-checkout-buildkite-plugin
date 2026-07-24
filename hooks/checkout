@@ -67,52 +67,38 @@ if resolve_git_mirror "${BUILDKITE_REPO}"; then
   GIT_MIRROR_AVAILABLE="true"
 fi
 
+REPOSITORY_REUSED="true"
+
 # clone the repo without checking out files if it does not exist already
 if [[ ! -d .git ]]; then
-  if [[ "${GIT_MIRROR_AVAILABLE}" = "true" ]] && acquire_git_mirror_update_lock "${GIT_MIRROR_DIR}"; then
-    log_info "Cloning repository locally from git mirror ${GIT_MIRROR_DIR}"
-    # The mirror and checkout may be on different filesystems, so hardlinks
-    # cannot be used. --shared uses an alternates file instead and avoids
-    # copying the mirror's full object database into the sparse checkout.
-    if ! git clone --shared --no-checkout -v "${GIT_MIRROR_DIR}" .; then
-      release_git_mirror_update_lock
-      log_error "Failed to clone repository from git mirror"
-      exit 1
-    fi
-    release_git_mirror_update_lock
-
-    if ! git remote set-url origin "${BUILDKITE_REPO}"; then
-      log_error "Failed to set repository origin to ${BUILDKITE_REPO}"
-      exit 1
-    fi
+  REPOSITORY_REUSED="false"
+  GIT_CLONE_ARGS=(--no-checkout)
+  if [[ "${GIT_MIRROR_AVAILABLE}" = "true" ]]; then
+    log_info "Cloning repository using reference mirror ${GIT_MIRROR_DIR}"
+    GIT_CLONE_ARGS+=(--reference "${GIT_MIRROR_DIR}")
   else
     log_info "Cloning repository ${BUILDKITE_REPO}"
-    if ! git clone \
-      --depth 1 \
-      --filter=blob:none \
-      --no-checkout \
-      -v \
-      "${BUILDKITE_REPO}" .; then
-      log_error "Failed to clone repository"
-      exit 1
-    fi
+  fi
+
+  if ! git clone "${GIT_CLONE_ARGS[@]}" -v "${BUILDKITE_REPO}" .; then
+    log_error "Failed to clone repository"
+    exit 1
   fi
   log_success "Repository cloned successfully"
 fi
 
-# Enable clean checkout option to deal with corrupted repository states
-if [[ "${CLEAN_CHECKOUT_OPTION}" = "true" ]]; then
-  log_info "Clean checkout enabled - resetting repository state"
-  # Remove lock files (prevents "another git process" errors)
-  find .git -name "*.lock" -delete 2>/dev/null || true
-  # Reset everything: index, working tree, and tracked files
-  # This handles corrupted index, uncommitted changes, and staged changes
-  git reset --hard HEAD 2>/dev/null || true
-  # Clean untracked and ignored files
-  # Must run AFTER reset to also clean files that were previously tracked
-  git clean -ffxdq 2>/dev/null || true
-else
-  git clean -ffxdq
+# Clean a reused checkout before changing its sparse patterns. A fresh
+# no-checkout clone is already clean; resetting it here would materialize the
+# mirror's HEAD before sparse checkout is configured.
+if [[ "${REPOSITORY_REUSED}" = "true" ]]; then
+  if [[ "${CLEAN_CHECKOUT_OPTION}" = "true" ]]; then
+    log_info "Clean checkout enabled - resetting repository state"
+    find .git -name "*.lock" -delete 2>/dev/null || true
+    git reset --hard HEAD 2>/dev/null || true
+    git clean -ffxdq 2>/dev/null || true
+  else
+    git clean -ffxdq
+  fi
 fi
 
 FETCH_FLAGS=()
@@ -121,7 +107,7 @@ if [[ -n "${BUILDKITE_GIT_FETCH_FLAGS:-}" ]]; then
   read -r -a FETCH_FLAGS <<<"${BUILDKITE_GIT_FETCH_FLAGS}"
 fi
 
-FETCH_FLAGS+=(--depth 1 origin)
+FETCH_FLAGS+=(origin)
 
 FETCH_OUTPUT=""
 
@@ -188,12 +174,7 @@ if [[ "${BUILDKITE_PULL_REQUEST_USING_MERGE_REFSPEC:-false}" = "true" ]] \
   fi
 fi
 
-if [[ "${USE_MERGE_REFSPEC}" != "true" ]] \
-  && [[ "${GIT_MIRROR_AVAILABLE}" = "true" ]] \
-  && [[ "${BUILDKITE_COMMIT}" != "HEAD" ]] \
-  && git cat-file -e "${BUILDKITE_COMMIT}^{commit}" 2>/dev/null; then
-  log_success "Commit ${BUILDKITE_COMMIT} is already available from the git mirror; skipping fetch"
-elif [[ "${USE_MERGE_REFSPEC}" != "true" ]]; then
+if [[ "${USE_MERGE_REFSPEC}" != "true" ]]; then
   if [[ ${BUILDKITE_COMMIT} = "HEAD" ]]; then
     FETCH_FLAGS+=("${BUILDKITE_BRANCH}")
   else
@@ -219,15 +200,27 @@ if [[ "${USE_MERGE_REFSPEC}" = "true" ]]; then
 else
   log_info "Checking out ${BUILDKITE_COMMIT}"
 fi
+
+CHECKOUT_ARGS=()
+if [[ "${CLEAN_CHECKOUT_OPTION}" = "true" ]]; then
+  CHECKOUT_ARGS+=(--force)
+fi
+
 if [[ "${USE_MERGE_REFSPEC}" = "true" ]] || [[ ${BUILDKITE_COMMIT} = "HEAD" ]]; then
-  if ! git checkout FETCH_HEAD; then
+  if ! git checkout "${CHECKOUT_ARGS[@]}" FETCH_HEAD; then
     log_error "Failed to checkout FETCH_HEAD"
     exit 1
   fi
 else
-  if ! git checkout "${BUILDKITE_COMMIT}"; then
+  if ! git checkout "${CHECKOUT_ARGS[@]}" "${BUILDKITE_COMMIT}"; then
     log_error "Failed to checkout ${BUILDKITE_COMMIT}"
     exit 1
   fi
 fi
+
+if [[ "${REPOSITORY_REUSED}" = "false" ]] && [[ "${CLEAN_CHECKOUT_OPTION}" = "true" ]]; then
+  log_info "Clean checkout enabled - cleaning repository after checkout"
+  git clean -ffxdq 2>/dev/null || true
+fi
+
 log_success "Sparse checkout completed successfully"
