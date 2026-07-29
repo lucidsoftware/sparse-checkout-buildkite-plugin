@@ -66,7 +66,7 @@ Options that run after the sparse checkout completes, in the `post-checkout` hoo
 
 #### `unshallow` ('true' or 'false')
 
-Convert the shallow clone into a full-depth clone by running `git fetch --unshallow origin` after checkout. This is useful when your build requires full git history (for example, changelog generation, `git log`, or `git blame`). If the repository is already unshallow, this step is skipped.
+Convert the shallow clone into a full-depth clone by running `git fetch --no-tags --unshallow origin` after checkout. This fetches commit history without fetching tag refs, which is useful when your build needs commit ancestry (for example, `git merge-base`, changelog generation, `git log`, or `git blame`). If the repository is already unshallow, this step is skipped.
 
 ## Environment Variables
 

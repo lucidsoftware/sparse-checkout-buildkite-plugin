@@ -20,7 +20,7 @@ UNSHALLOW_OPTION="$(plugin_read_config POST_CHECKOUT_UNSHALLOW "false")"
 if [[ "${UNSHALLOW_OPTION}" = "true" ]]; then
   if [[ "$(git rev-parse --is-shallow-repository)" = "true" ]]; then
     log_info "Unshallowing repository"
-    if ! git fetch --unshallow origin; then
+    if ! git fetch --no-tags --unshallow origin; then
       log_error "Failed to unshallow repository"
       exit 1
     fi

@@ -10,16 +10,17 @@ teardown() {
   unstub git 2>/dev/null || true
 }
 
-@test "Unshallow enabled and repo is shallow runs git fetch --unshallow" {
+@test "Unshallow enabled and repo is shallow fetches history without tags" {
   export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_POST_CHECKOUT_UNSHALLOW="true"
 
   stub git "rev-parse --is-shallow-repository : echo 'true'" \
-           "fetch --unshallow origin : echo 'git fetch unshallow'"
+           "fetch --no-tags --unshallow origin : echo 'git fetch unshallow without tags'"
 
   run "$HOOK_DIR"/hooks/post-checkout
 
   assert_success
   assert_output --partial 'Unshallowing repository'
+  assert_output --partial 'git fetch unshallow without tags'
   assert_output --partial 'Repository unshallowed successfully'
 }
 
@@ -45,7 +46,7 @@ teardown() {
   export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_POST_CHECKOUT_UNSHALLOW="true"
 
   stub git "rev-parse --is-shallow-repository : echo 'true'" \
-           "fetch --unshallow origin : exit 1"
+           "fetch --no-tags --unshallow origin : exit 1"
 
   run "$HOOK_DIR"/hooks/post-checkout
 
