@@ -64,11 +64,29 @@ validate_required_config "BUILDKITE_COMMIT" "${BUILDKITE_COMMIT:-}"
 # clone the repo without checking out files if it does not exist already
 if [[ ! -d .git ]]; then
   log_info "Cloning repository ${BUILDKITE_REPO}"
+  REFERENCE_REPO="${BUILDKITE_REPO_MIRROR:-}"
+  if [[ -z "${REFERENCE_REPO}" ]] && [[ -n "${BUILDKITE_GIT_MIRRORS_PATH:-}" ]]; then
+    MIRROR_REPO="${BUILDKITE_REPO%/}"
+    MIRROR_REPO="${MIRROR_REPO%.git}"
+    [[ "${MIRROR_REPO}" =~ ^git@([^:]+):(.+)$ ]] && MIRROR_REPO="https://${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+    MIRROR_NAME="${MIRROR_REPO//[!A-Za-z0-9-]/-}"
+    MIRROR_CANDIDATE="${BUILDKITE_GIT_MIRRORS_PATH%/}/${MIRROR_NAME}"
+    [[ -d "${MIRROR_CANDIDATE}/objects" ]] && REFERENCE_REPO="${MIRROR_CANDIDATE}"
+  fi
+
+  REFERENCE_REPO_ARGS=()
+  if [[ -n "${REFERENCE_REPO}" ]]; then
+    log_info "Using git reference repository ${REFERENCE_REPO}"
+    REFERENCE_REPO_ARGS=(--reference "${REFERENCE_REPO}")
+  elif [[ -n "${BUILDKITE_GIT_MIRRORS_PATH:-}" ]]; then
+    log_warning "No git mirror found for ${BUILDKITE_REPO} under ${BUILDKITE_GIT_MIRRORS_PATH}; cloning without --reference"
+  fi
+
   if ! git clone \
     --depth 1 \
     --filter=blob:none \
     --no-checkout \
-    ${BUILDKITE_REPO_MIRROR:+--reference "$BUILDKITE_REPO_MIRROR"} \
+    "${REFERENCE_REPO_ARGS[@]}" \
     -v \
     "${BUILDKITE_REPO}" .; then
     log_error "Failed to clone repository"

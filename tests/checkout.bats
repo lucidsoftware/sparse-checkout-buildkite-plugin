@@ -2,6 +2,8 @@
 
 setup() {
   load "${BATS_PLUGIN_PATH}/load.bash"
+  HOOK_DIR="$PWD"
+  WORK_DIR=""
 
   # Uncomment to enable stub debugging
   # export CURL_STUB_DEBUG=/dev/tty
@@ -11,6 +13,44 @@ setup() {
   export BUILDKITE_REPO_SSH_HOST="default_host"
   export BUILDKITE_COMMIT="dummy-commit-hash"
   export BUILDKITE_REPO="git@github.com:example/repo.git"
+}
+
+teardown() {
+  cd "$HOOK_DIR" 2>/dev/null || true
+  if [[ -n "${WORK_DIR}" && -d "${WORK_DIR}" ]]; then
+    rm -rf "${WORK_DIR}"
+  fi
+  unstub git 2>/dev/null || true
+  unstub ssh-keyscan 2>/dev/null || true
+  unstub sleep 2>/dev/null || true
+}
+
+@test "Clone derives mirror path from BUILDKITE_GIT_MIRRORS_PATH" {
+  export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_SKIP_SSH_KEYSCAN="true"
+  export BUILDKITE_REPO="https://github.com/lucid-software/internal-main.git"
+  unset BUILDKITE_REPO_MIRROR
+
+  WORK_DIR="$(mktemp -d)"
+  export BUILDKITE_GIT_MIRRORS_PATH="${WORK_DIR}/git-mirrors"
+  local mirror_path="${BUILDKITE_GIT_MIRRORS_PATH}/https---github-com-lucid-software-internal-main"
+  mkdir -p "${mirror_path}/objects"
+  mkdir "${WORK_DIR}/checkout"
+  cd "${WORK_DIR}/checkout"
+
+  stub git \
+    "clone --depth 1 --filter=blob:none --no-checkout --reference ${mirror_path} -v ${BUILDKITE_REPO} . : echo 'git clone with derived reference'" \
+    "clean -ffxdq : echo 'git clean'" \
+    "fetch --depth 1 origin * : echo 'git fetch'" \
+    "sparse-checkout set * * : echo 'git sparse-checkout'" \
+    "checkout * : echo 'checkout'"
+
+  run "${HOOK_DIR}/hooks/checkout"
+
+  assert_success
+  assert_output --partial "Using git reference repository ${mirror_path}"
+  assert_output --partial 'git clone with derived reference'
+
+  unstub git
 }
 
 @test "Skip ssh-keyscan when option provided" {
