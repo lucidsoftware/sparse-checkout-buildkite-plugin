@@ -82,7 +82,7 @@ if [[ ! -d .git ]]; then
     log_warning "No git mirror found for ${BUILDKITE_REPO} under ${BUILDKITE_GIT_MIRRORS_PATH}; cloning without --reference"
   fi
 
-  if ! git clone \
+  if ! git_without_auto_maintenance clone \
     --depth 1 \
     --filter=blob:none \
     --no-checkout \
@@ -130,7 +130,7 @@ is_missing_merge_ref_error() {
 # otherwise logs and exits with git's status.
 try_fetch_merge_ref() {
   local merge_ref="$1"
-  if FETCH_OUTPUT=$(git fetch "${FETCH_FLAGS[@]}" "${merge_ref}" 2>&1); then
+  if FETCH_OUTPUT=$(git_without_auto_maintenance fetch "${FETCH_FLAGS[@]}" "${merge_ref}" 2>&1); then
     [[ -n "${FETCH_OUTPUT}" ]] && printf '%s\n' "${FETCH_OUTPUT}"
     return 0
   else
@@ -191,7 +191,7 @@ if [[ "${USE_MERGE_REFSPEC}" != "true" ]]; then
   fi
 
   log_info "Fetching ${BUILDKITE_COMMIT} from origin"
-  if ! git fetch "${FETCH_FLAGS[@]}"; then
+  if ! git_without_auto_maintenance fetch "${FETCH_FLAGS[@]}"; then
     log_error "Failed to fetch ${BUILDKITE_COMMIT} from origin"
     exit 1
   fi

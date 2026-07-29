@@ -79,6 +79,19 @@ run_command() {
   fi
 }
 
+# Run git without automatic maintenance. On large repos using --reference,
+# auto maintenance can repack objects from the reference repo into the checkout.
+git_without_auto_maintenance() {
+  GIT_CONFIG_COUNT=3 \
+    GIT_CONFIG_KEY_0=gc.auto \
+    GIT_CONFIG_VALUE_0=0 \
+    GIT_CONFIG_KEY_1=maintenance.auto \
+    GIT_CONFIG_VALUE_1=false \
+    GIT_CONFIG_KEY_2=fetch.writeCommitGraph \
+    GIT_CONFIG_VALUE_2=false \
+    git "$@"
+}
+
 # Usage: if is_debug_mode; then echo "Additional debug info"; fi
 is_debug_mode() {
   [[ "${BUILDKITE_PLUGIN_DEBUG:-false}" =~ (true|on|1) ]]

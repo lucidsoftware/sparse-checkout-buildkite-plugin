@@ -14,7 +14,7 @@ teardown() {
   export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_POST_CHECKOUT_UNSHALLOW="true"
 
   stub git "rev-parse --is-shallow-repository : echo 'true'" \
-           "fetch --unshallow origin : echo 'git fetch unshallow'"
+           "fetch --unshallow origin : [[ \"\$GIT_CONFIG_VALUE_0\" = \"0\" ]]; [[ \"\$GIT_CONFIG_VALUE_1\" = \"false\" ]]; [[ \"\$GIT_CONFIG_VALUE_2\" = \"false\" ]]; echo 'git fetch unshallow without tags'"
 
   run "$HOOK_DIR"/hooks/post-checkout
 

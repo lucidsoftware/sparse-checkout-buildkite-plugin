@@ -38,7 +38,7 @@ teardown() {
   cd "${WORK_DIR}/checkout"
 
   stub git \
-    "clone --depth 1 --filter=blob:none --no-checkout --reference ${mirror_path} -v ${BUILDKITE_REPO} . : echo 'git clone with derived reference'" \
+    "clone --depth 1 --filter=blob:none --no-checkout --reference ${mirror_path} -v ${BUILDKITE_REPO} . : [[ \"\$GIT_CONFIG_VALUE_0\" = \"0\" ]]; [[ \"\$GIT_CONFIG_VALUE_1\" = \"false\" ]]; [[ \"\$GIT_CONFIG_VALUE_2\" = \"false\" ]]; echo 'git clone with derived reference'" \
     "clean -ffxdq : echo 'git clean'" \
     "fetch --depth 1 origin * : echo 'git fetch'" \
     "sparse-checkout set * * : echo 'git sparse-checkout'" \
