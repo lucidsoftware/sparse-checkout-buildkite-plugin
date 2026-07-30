@@ -92,6 +92,29 @@ git_without_auto_maintenance() {
     git "$@"
 }
 
+unshallow_from_reference_repo() {
+  if [[ ! -f .git/shallow ]] || [[ ! -s .git/objects/info/alternates ]]; then
+    return 1
+  fi
+
+  local shallow_commit
+  local header
+  local parent
+
+  while IFS= read -r shallow_commit; do
+    [[ -n "${shallow_commit}" ]] || continue
+
+    while read -r header parent _; do
+      [[ "${header}" = "parent" ]] || continue
+      if ! git cat-file -e "${parent}^{commit}" 2>/dev/null; then
+        return 1
+      fi
+    done < <(git cat-file -p "${shallow_commit}")
+  done <.git/shallow
+
+  rm .git/shallow
+}
+
 # Usage: if is_debug_mode; then echo "Additional debug info"; fi
 is_debug_mode() {
   [[ "${BUILDKITE_PLUGIN_DEBUG:-false}" =~ (true|on|1) ]]

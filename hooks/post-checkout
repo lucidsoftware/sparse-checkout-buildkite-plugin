@@ -20,11 +20,14 @@ UNSHALLOW_OPTION="$(plugin_read_config POST_CHECKOUT_UNSHALLOW "false")"
 if [[ "${UNSHALLOW_OPTION}" = "true" ]]; then
   if [[ "$(git rev-parse --is-shallow-repository)" = "true" ]]; then
     log_info "Unshallowing repository"
-    if ! git_without_auto_maintenance fetch --unshallow origin; then
+    if unshallow_from_reference_repo; then
+      log_success "Repository unshallowed using reference repository"
+    elif ! git_without_auto_maintenance fetch --unshallow origin; then
       log_error "Failed to unshallow repository"
       exit 1
+    else
+      log_success "Repository unshallowed successfully"
     fi
-    log_success "Repository unshallowed successfully"
   else
     log_info "Repository is not shallow, skipping unshallow"
   fi
