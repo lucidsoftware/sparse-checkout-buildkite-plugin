@@ -53,6 +53,40 @@ teardown() {
   unstub git
 }
 
+@test "Unshallow checkout with reference repo initializes full-depth repository" {
+  export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_SKIP_SSH_KEYSCAN="true"
+  export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_POST_CHECKOUT_UNSHALLOW="true"
+  export BUILDKITE_REPO="https://github.com/lucid-software/internal-main.git"
+  unset BUILDKITE_REPO_MIRROR
+
+  WORK_DIR="$(mktemp -d)"
+  export BUILDKITE_GIT_MIRRORS_PATH="${WORK_DIR}/git-mirrors"
+  local mirror_path="${BUILDKITE_GIT_MIRRORS_PATH}/https---github-com-lucid-software-internal-main"
+  mkdir -p "${mirror_path}/objects"
+  mkdir "${WORK_DIR}/checkout"
+  cd "${WORK_DIR}/checkout"
+
+  stub git \
+    "init . : echo 'git init'" \
+    "config remote.origin.url ${BUILDKITE_REPO} : echo 'git config url'" \
+    "config --add remote.origin.fetch +refs/heads/*:refs/remotes/origin/* : echo 'git config fetch refspec'" \
+    "fetch --tags --force --quiet origin +refs/heads/*:refs/remotes/origin/* : [[ \"\$GIT_CONFIG_VALUE_0\" = \"0\" ]]; [[ \"\$GIT_CONFIG_VALUE_1\" = \"false\" ]]; [[ \"\$GIT_CONFIG_VALUE_2\" = \"false\" ]]; echo 'git fetch full branch refs and tags quietly'" \
+    "clean -ffxdq : echo 'git clean'" \
+    "cat-file -e ${BUILDKITE_COMMIT}^{commit} : true" \
+    "sparse-checkout set * * : echo 'git sparse-checkout'" \
+    "checkout ${BUILDKITE_COMMIT} : echo 'checkout commit'"
+
+  run "${HOOK_DIR}/hooks/checkout"
+
+  assert_success
+  assert_output --partial 'Initializing full-depth repository using reference repository'
+  assert_output --partial 'git fetch full branch refs and tags quietly'
+  assert_output --partial "Skipping target fetch; ${BUILDKITE_COMMIT} is already available"
+  [[ "$(cat .git/objects/info/alternates)" = "${mirror_path}/objects" ]]
+
+  unstub git
+}
+
 @test "Skip ssh-keyscan when option provided" {
   export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_SKIP_SSH_KEYSCAN="true"
 
