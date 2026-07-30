@@ -86,7 +86,7 @@ if [[ ! -d .git ]]; then
 
   if [[ "${UNSHALLOW_OPTION}" = "true" ]] && [[ -n "${REFERENCE_REPO}" ]] && [[ -d "${REFERENCE_REPO}/objects" ]]; then
     log_info "Initializing full-depth repository using reference repository"
-    if ! git_without_auto_maintenance init .; then
+    if ! git_without_auto_maintenance init --initial-branch=main .; then
       log_error "Failed to initialize repository"
       exit 1
     fi
@@ -242,12 +242,12 @@ else
   log_info "Checking out ${BUILDKITE_COMMIT}"
 fi
 if [[ "${USE_MERGE_REFSPEC}" = "true" ]] || [[ ${BUILDKITE_COMMIT} = "HEAD" ]]; then
-  if ! git checkout FETCH_HEAD; then
+  if ! git -c advice.detachedHead=false checkout FETCH_HEAD; then
     log_error "Failed to checkout FETCH_HEAD"
     exit 1
   fi
 else
-  if ! git checkout "${BUILDKITE_COMMIT}"; then
+  if ! git -c advice.detachedHead=false checkout "${BUILDKITE_COMMIT}"; then
     log_error "Failed to checkout ${BUILDKITE_COMMIT}"
     exit 1
   fi
