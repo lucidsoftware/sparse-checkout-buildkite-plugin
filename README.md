@@ -66,7 +66,9 @@ Options that run after the sparse checkout completes, in the `post-checkout` hoo
 
 #### `unshallow` ('true' or 'false')
 
-Convert the shallow clone into a full-depth clone by running `git fetch --unshallow origin` after checkout. This is useful when your build requires full git history (for example, changelog generation, `git log`, or `git blame`). If the repository is already unshallow, this step is skipped.
+Convert the checkout into a full-depth repository. When a Buildkite git mirror is available, the checkout hook initializes the repository with that mirror as a reference repository and fetches full-depth branch refs and tags up front, similar to Jenkins sparse checkouts with shallow clone disabled. This avoids creating a shallow clone and later unshallowing it. Without a usable reference repository, the post-checkout hook falls back to `git fetch --tags --quiet --unshallow origin`.
+
+This is useful when your build requires commit ancestry (for example, `git merge-base`, changelog generation, `git log`, or `git blame`). If the repository is already unshallow, the post-checkout step is skipped.
 
 ## Environment Variables
 

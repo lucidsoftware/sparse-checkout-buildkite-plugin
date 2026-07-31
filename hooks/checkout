@@ -29,6 +29,7 @@ fi
 
 SKIP_SSH_KEYSCAN_OPTION="$(plugin_read_config SKIP_SSH_KEYSCAN "false")"
 CLEAN_CHECKOUT_OPTION="$(plugin_read_config CLEAN_CHECKOUT "false")"
+UNSHALLOW_OPTION="$(plugin_read_config POST_CHECKOUT_UNSHALLOW "false")"
 
 MERGE_REF_RETRY_ATTEMPTS="$(plugin_read_config MERGE_REF_RETRY_ATTEMPTS "3")"
 
@@ -62,17 +63,53 @@ validate_required_config "BUILDKITE_REPO" "${BUILDKITE_REPO:-}"
 validate_required_config "BUILDKITE_COMMIT" "${BUILDKITE_COMMIT:-}"
 
 # clone the repo without checking out files if it does not exist already
+FULL_DEPTH_FETCH_DONE="false"
 if [[ ! -d .git ]]; then
   log_info "Cloning repository ${BUILDKITE_REPO}"
-  if ! git clone \
-    --depth 1 \
-    --filter=blob:none \
-    --no-checkout \
-    ${BUILDKITE_REPO_MIRROR:+--reference "$BUILDKITE_REPO_MIRROR"} \
-    -v \
-    "${BUILDKITE_REPO}" .; then
-    log_error "Failed to clone repository"
-    exit 1
+  REFERENCE_REPO="${BUILDKITE_REPO_MIRROR:-}"
+  if [[ -z "${REFERENCE_REPO}" ]] && [[ -n "${BUILDKITE_GIT_MIRRORS_PATH:-}" ]]; then
+    MIRROR_REPO="${BUILDKITE_REPO%/}"
+    MIRROR_REPO="${MIRROR_REPO%.git}"
+    [[ "${MIRROR_REPO}" =~ ^git@([^:]+):(.+)$ ]] && MIRROR_REPO="https://${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+    MIRROR_NAME="${MIRROR_REPO//[!A-Za-z0-9-]/-}"
+    MIRROR_CANDIDATE="${BUILDKITE_GIT_MIRRORS_PATH%/}/${MIRROR_NAME}"
+    [[ -d "${MIRROR_CANDIDATE}/objects" ]] && REFERENCE_REPO="${MIRROR_CANDIDATE}"
+  fi
+
+  REFERENCE_REPO_ARGS=()
+  if [[ -n "${REFERENCE_REPO}" ]]; then
+    log_info "Using git reference repository ${REFERENCE_REPO}"
+    REFERENCE_REPO_ARGS=(--reference "${REFERENCE_REPO}")
+  elif [[ -n "${BUILDKITE_GIT_MIRRORS_PATH:-}" ]]; then
+    log_warning "No git mirror found for ${BUILDKITE_REPO} under ${BUILDKITE_GIT_MIRRORS_PATH}; cloning without --reference"
+  fi
+
+  if [[ "${UNSHALLOW_OPTION}" = "true" ]] && [[ -n "${REFERENCE_REPO}" ]] && [[ -d "${REFERENCE_REPO}/objects" ]]; then
+    log_info "Initializing full-depth repository using reference repository"
+    if ! git_without_auto_maintenance init --initial-branch=main .; then
+      log_error "Failed to initialize repository"
+      exit 1
+    fi
+    mkdir -p .git/objects/info
+    printf '%s/objects\n' "${REFERENCE_REPO}" >.git/objects/info/alternates
+    git config remote.origin.url "${BUILDKITE_REPO}"
+    git config --add remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+    if ! git_without_auto_maintenance fetch --tags --force --quiet origin '+refs/heads/*:refs/remotes/origin/*'; then
+      log_error "Failed to fetch branch refs from origin"
+      exit 1
+    fi
+    FULL_DEPTH_FETCH_DONE="true"
+  else
+    if ! git_without_auto_maintenance clone \
+      --depth 1 \
+      --filter=blob:none \
+      --no-checkout \
+      "${REFERENCE_REPO_ARGS[@]}" \
+      -v \
+      "${BUILDKITE_REPO}" .; then
+      log_error "Failed to clone repository"
+      exit 1
+    fi
   fi
   log_success "Repository cloned successfully"
 fi
@@ -98,7 +135,10 @@ if [[ -n "${BUILDKITE_GIT_FETCH_FLAGS:-}" ]]; then
   read -r -a FETCH_FLAGS <<<"${BUILDKITE_GIT_FETCH_FLAGS}"
 fi
 
-FETCH_FLAGS+=(--depth 1 origin)
+if [[ "${FULL_DEPTH_FETCH_DONE}" != "true" ]]; then
+  FETCH_FLAGS+=(--depth 1)
+fi
+FETCH_FLAGS+=(origin)
 
 FETCH_OUTPUT=""
 
@@ -112,7 +152,7 @@ is_missing_merge_ref_error() {
 # otherwise logs and exits with git's status.
 try_fetch_merge_ref() {
   local merge_ref="$1"
-  if FETCH_OUTPUT=$(git fetch "${FETCH_FLAGS[@]}" "${merge_ref}" 2>&1); then
+  if FETCH_OUTPUT=$(git_without_auto_maintenance fetch "${FETCH_FLAGS[@]}" "${merge_ref}" 2>&1); then
     [[ -n "${FETCH_OUTPUT}" ]] && printf '%s\n' "${FETCH_OUTPUT}"
     return 0
   else
@@ -168,14 +208,24 @@ fi
 if [[ "${USE_MERGE_REFSPEC}" != "true" ]]; then
   if [[ ${BUILDKITE_COMMIT} = "HEAD" ]]; then
     FETCH_FLAGS+=("${BUILDKITE_BRANCH}")
+    TARGET_ALREADY_FETCHED="false"
   else
     FETCH_FLAGS+=("${BUILDKITE_COMMIT}")
+    if [[ "${FULL_DEPTH_FETCH_DONE}" = "true" ]] && git cat-file -e "${BUILDKITE_COMMIT}^{commit}" 2>/dev/null; then
+      TARGET_ALREADY_FETCHED="true"
+    else
+      TARGET_ALREADY_FETCHED="false"
+    fi
   fi
 
-  log_info "Fetching ${BUILDKITE_COMMIT} from origin"
-  if ! git fetch "${FETCH_FLAGS[@]}"; then
-    log_error "Failed to fetch ${BUILDKITE_COMMIT} from origin"
-    exit 1
+  if [[ "${TARGET_ALREADY_FETCHED}" = "true" ]]; then
+    log_info "Skipping target fetch; ${BUILDKITE_COMMIT} is already available"
+  else
+    log_info "Fetching ${BUILDKITE_COMMIT} from origin"
+    if ! git_without_auto_maintenance fetch "${FETCH_FLAGS[@]}"; then
+      log_error "Failed to fetch ${BUILDKITE_COMMIT} from origin"
+      exit 1
+    fi
   fi
 fi
 log_success "Fetch completed successfully"
@@ -192,12 +242,12 @@ else
   log_info "Checking out ${BUILDKITE_COMMIT}"
 fi
 if [[ "${USE_MERGE_REFSPEC}" = "true" ]] || [[ ${BUILDKITE_COMMIT} = "HEAD" ]]; then
-  if ! git checkout FETCH_HEAD; then
+  if ! git -c advice.detachedHead=false checkout FETCH_HEAD; then
     log_error "Failed to checkout FETCH_HEAD"
     exit 1
   fi
 else
-  if ! git checkout "${BUILDKITE_COMMIT}"; then
+  if ! git -c advice.detachedHead=false checkout "${BUILDKITE_COMMIT}"; then
     log_error "Failed to checkout ${BUILDKITE_COMMIT}"
     exit 1
   fi

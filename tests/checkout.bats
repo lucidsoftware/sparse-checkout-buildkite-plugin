@@ -2,6 +2,8 @@
 
 setup() {
   load "${BATS_PLUGIN_PATH}/load.bash"
+  HOOK_DIR="$PWD"
+  WORK_DIR=""
 
   # Uncomment to enable stub debugging
   # export CURL_STUB_DEBUG=/dev/tty
@@ -13,13 +15,86 @@ setup() {
   export BUILDKITE_REPO="git@github.com:example/repo.git"
 }
 
+teardown() {
+  cd "$HOOK_DIR" 2>/dev/null || true
+  if [[ -n "${WORK_DIR}" && -d "${WORK_DIR}" ]]; then
+    rm -rf "${WORK_DIR}"
+  fi
+  unstub git 2>/dev/null || true
+  unstub ssh-keyscan 2>/dev/null || true
+  unstub sleep 2>/dev/null || true
+}
+
+@test "Clone derives mirror path from BUILDKITE_GIT_MIRRORS_PATH" {
+  export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_SKIP_SSH_KEYSCAN="true"
+  export BUILDKITE_REPO="https://github.com/lucid-software/internal-main.git"
+  unset BUILDKITE_REPO_MIRROR
+
+  WORK_DIR="$(mktemp -d)"
+  export BUILDKITE_GIT_MIRRORS_PATH="${WORK_DIR}/git-mirrors"
+  local mirror_path="${BUILDKITE_GIT_MIRRORS_PATH}/https---github-com-lucid-software-internal-main"
+  mkdir -p "${mirror_path}/objects"
+  mkdir "${WORK_DIR}/checkout"
+  cd "${WORK_DIR}/checkout"
+
+  stub git \
+    "clone --depth 1 --filter=blob:none --no-checkout --reference ${mirror_path} -v ${BUILDKITE_REPO} . : [[ \"\$GIT_CONFIG_VALUE_0\" = \"0\" ]]; [[ \"\$GIT_CONFIG_VALUE_1\" = \"false\" ]]; [[ \"\$GIT_CONFIG_VALUE_2\" = \"false\" ]]; echo 'git clone with derived reference'" \
+    "clean -ffxdq : echo 'git clean'" \
+    "fetch --depth 1 origin * : echo 'git fetch'" \
+    "sparse-checkout set * * : echo 'git sparse-checkout'" \
+    "-c advice.detachedHead=false checkout * : echo 'checkout'"
+
+  run "${HOOK_DIR}/hooks/checkout"
+
+  assert_success
+  assert_output --partial "Using git reference repository ${mirror_path}"
+  assert_output --partial 'git clone with derived reference'
+
+  unstub git
+}
+
+@test "Unshallow checkout with reference repo initializes full-depth repository" {
+  export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_SKIP_SSH_KEYSCAN="true"
+  export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_POST_CHECKOUT_UNSHALLOW="true"
+  export BUILDKITE_REPO="https://github.com/lucid-software/internal-main.git"
+  unset BUILDKITE_REPO_MIRROR
+
+  WORK_DIR="$(mktemp -d)"
+  export BUILDKITE_GIT_MIRRORS_PATH="${WORK_DIR}/git-mirrors"
+  local mirror_path="${BUILDKITE_GIT_MIRRORS_PATH}/https---github-com-lucid-software-internal-main"
+  mkdir -p "${mirror_path}/objects"
+  mkdir "${WORK_DIR}/checkout"
+  cd "${WORK_DIR}/checkout"
+
+  stub git \
+    "init --initial-branch=main . : echo 'git init'" \
+    "config remote.origin.url ${BUILDKITE_REPO} : echo 'git config url'" \
+    "config --add remote.origin.fetch +refs/heads/*:refs/remotes/origin/* : echo 'git config fetch refspec'" \
+    "fetch --tags --force --quiet origin +refs/heads/*:refs/remotes/origin/* : [[ \"\$GIT_CONFIG_VALUE_0\" = \"0\" ]]; [[ \"\$GIT_CONFIG_VALUE_1\" = \"false\" ]]; [[ \"\$GIT_CONFIG_VALUE_2\" = \"false\" ]]; echo 'git fetch full branch refs and tags quietly'" \
+    "clean -ffxdq : echo 'git clean'" \
+    "cat-file -e ${BUILDKITE_COMMIT}^{commit} : true" \
+    "sparse-checkout set * * : echo 'git sparse-checkout'" \
+    "-c advice.detachedHead=false checkout ${BUILDKITE_COMMIT} : echo 'checkout commit'"
+
+  run "${HOOK_DIR}/hooks/checkout"
+
+  assert_success
+  assert_output --partial 'Initializing full-depth repository using reference repository'
+  assert_output --partial 'git fetch full branch refs and tags quietly'
+  assert_output --partial "Skipping target fetch; ${BUILDKITE_COMMIT} is already available"
+  [[ "$(cat .git/objects/info/alternates)" = "${mirror_path}/objects" ]]
+
+  unstub git
+}
+
 @test "Skip ssh-keyscan when option provided" {
   export BUILDKITE_PLUGIN_SPARSE_CHECKOUT_SKIP_SSH_KEYSCAN="true"
 
-  stub git "clean \* : echo 'git clean'"
-  stub git "fetch --depth 1 origin \* : echo 'git fetch'"
-  stub git "sparse-checkout set \* \* : echo 'git sparse-checkout'" 
-  stub git "checkout \* : echo 'checkout'"
+  stub git \
+    "clean \* : echo 'git clean'" \
+    "fetch --depth 1 origin \* : echo 'git fetch'" \
+    "sparse-checkout set \* \* : echo 'git sparse-checkout'" \
+    "-c advice.detachedHead=false checkout \* : echo 'checkout'"
 
   run "$PWD"/hooks/checkout
 
@@ -33,10 +108,11 @@ setup() {
   unset BUILDKITE_PLUGIN_SPARSE_CHECKOUT_SKIP_SSH_KEYSCAN
 
   stub ssh-keyscan "\* : echo 'keyscan'"
-  stub git "clean \* : echo 'git clean'"
-  stub git "fetch --depth 1 origin \* : echo 'git fetch'"
-  stub git "sparse-checkout set \* \* : echo 'git sparse-checkout'"
-  stub git "checkout \* : echo 'checkout'"
+  stub git \
+    "clean \* : echo 'git clean'" \
+    "fetch --depth 1 origin \* : echo 'git fetch'" \
+    "sparse-checkout set \* \* : echo 'git sparse-checkout'" \
+    "-c advice.detachedHead=false checkout \* : echo 'checkout'"
 
   run "$PWD"/hooks/checkout
 
@@ -52,10 +128,11 @@ setup() {
   export BUILDKITE_REPO_SSH_HOST="github.com"
 
   stub ssh-keyscan "\* : echo 'keyscan'"
-  stub git "clean \* : echo 'git clean'"
-  stub git "fetch --depth 1 origin \* : echo 'git fetch'"
-  stub git "sparse-checkout set \* \* : echo 'git sparse-checkout'"
-  stub git "checkout \* : echo 'checkout'"
+  stub git \
+    "clean \* : echo 'git clean'" \
+    "fetch --depth 1 origin \* : echo 'git fetch'" \
+    "sparse-checkout set \* \* : echo 'git sparse-checkout'" \
+    "-c advice.detachedHead=false checkout \* : echo 'checkout'"
 
   run "$PWD"/hooks/checkout
 
@@ -69,10 +146,11 @@ setup() {
 @test "Skip ssh-keyscan when BUILDKITE_REPO_SSH_HOST is unset" {
   unset BUILDKITE_REPO_SSH_HOST
 
-  stub git "clean \* : echo 'git clean'"
-  stub git "fetch --depth 1 origin \* : echo 'git fetch'"
-  stub git "sparse-checkout set \* \* : echo 'git sparse-checkout'"
-  stub git "checkout \* : echo 'checkout'"
+  stub git \
+    "clean \* : echo 'git clean'" \
+    "fetch --depth 1 origin \* : echo 'git fetch'" \
+    "sparse-checkout set \* \* : echo 'git sparse-checkout'" \
+    "-c advice.detachedHead=false checkout \* : echo 'checkout'"
 
   run "$PWD"/hooks/checkout
 
@@ -91,7 +169,7 @@ setup() {
   stub git "clean * : echo 'git clean'"
   stub git "fetch --prune --verbose --depth 1 origin * : echo 'git fetch with flags'"
   stub git "sparse-checkout set * * : echo 'git sparse-checkout'"
-  stub git "checkout * : echo 'checkout'"
+  stub git "-c advice.detachedHead=false checkout * : echo 'checkout'"
 
   run "$PWD"/hooks/checkout
 
@@ -109,7 +187,7 @@ setup() {
   stub git "clean -ffxdq : echo 'git clean normal'"
   stub git "fetch --depth 1 origin * : echo 'git fetch'"
   stub git "sparse-checkout set * * : echo 'git sparse-checkout'"
-  stub git "checkout * : echo 'checkout'"
+  stub git "-c advice.detachedHead=false checkout * : echo 'checkout'"
 
   run "$PWD"/hooks/checkout
 
@@ -129,7 +207,7 @@ setup() {
   stub git "clean -ffxdq : echo 'git clean aggressive'"
   stub git "fetch --depth 1 origin * : echo 'git fetch'"
   stub git "sparse-checkout set * * : echo 'git sparse-checkout'"
-  stub git "checkout * : echo 'checkout'"
+  stub git "-c advice.detachedHead=false checkout * : echo 'checkout'"
 
   run "$PWD"/hooks/checkout
 
@@ -152,7 +230,7 @@ setup() {
   stub git "clean * : echo 'git clean'"
   stub git "fetch --depth 1 origin refs/pull/123/merge : echo 'git fetch merge refspec'"
   stub git "sparse-checkout set * * : echo 'git sparse-checkout'"
-  stub git "checkout FETCH_HEAD : echo 'checkout fetch_head'"
+  stub git "-c advice.detachedHead=false checkout FETCH_HEAD : echo 'checkout fetch_head'"
 
   run "$PWD"/hooks/checkout
 
@@ -173,7 +251,7 @@ setup() {
   stub git "clean * : echo 'git clean'"
   stub git "fetch --depth 1 origin refs/pull/456/merge : echo 'git fetch merge refspec'"
   stub git "sparse-checkout set * * : echo 'git sparse-checkout'"
-  stub git "checkout FETCH_HEAD : echo 'checkout fetch_head'"
+  stub git "-c advice.detachedHead=false checkout FETCH_HEAD : echo 'checkout fetch_head'"
 
   run "$PWD"/hooks/checkout
 
@@ -200,7 +278,7 @@ setup() {
     "fetch --depth 1 origin refs/pull/123/merge : echo \"fatal: couldn't find remote ref refs/pull/123/merge\" >&2; exit 1" \
     "fetch --depth 1 origin refs/pull/123/merge : echo 'git fetch merge refspec'" \
     "sparse-checkout set * * : echo 'git sparse-checkout'" \
-    "checkout FETCH_HEAD : echo 'checkout fetch_head'"
+    "-c advice.detachedHead=false checkout FETCH_HEAD : echo 'checkout fetch_head'"
 
   run "$PWD"/hooks/checkout
 
@@ -224,7 +302,7 @@ setup() {
   stub git "clean * : echo 'git clean'"
   stub git "fetch --depth 1 origin abc123 : echo 'git fetch commit'"
   stub git "sparse-checkout set * * : echo 'git sparse-checkout'"
-  stub git "checkout abc123 : echo 'checkout commit'"
+  stub git "-c advice.detachedHead=false checkout abc123 : echo 'checkout commit'"
 
   run "$PWD"/hooks/checkout
 
@@ -245,7 +323,7 @@ setup() {
   stub git "clean * : echo 'git clean'"
   stub git "fetch --depth 1 origin abc123 : echo 'git fetch commit'"
   stub git "sparse-checkout set * * : echo 'git sparse-checkout'"
-  stub git "checkout abc123 : echo 'checkout commit'"
+  stub git "-c advice.detachedHead=false checkout abc123 : echo 'checkout commit'"
 
   run "$PWD"/hooks/checkout
 
@@ -265,7 +343,7 @@ setup() {
   stub git "clean -ffxdq : echo 'git clean'"
   stub git "fetch --depth 1 origin * : echo 'git fetch'"
   stub git "sparse-checkout set * * : echo 'git sparse-checkout'"
-  stub git "checkout * : echo 'checkout'"
+  stub git "-c advice.detachedHead=false checkout * : echo 'checkout'"
 
   run "$PWD"/hooks/checkout
 
