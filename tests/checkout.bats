@@ -236,7 +236,6 @@ teardown() {
 
   assert_success
   assert_output --partial 'git fetch merge refspec'
-  assert_output --partial 'checkout fetch_head'
 
   unstub ssh-keyscan
   unstub git
@@ -257,7 +256,6 @@ teardown() {
 
   assert_success
   assert_output --partial 'git fetch merge refspec'
-  assert_output --partial 'checkout fetch_head'
 
   unstub ssh-keyscan
   unstub git
@@ -286,7 +284,6 @@ teardown() {
   assert_output --partial 'retrying in 2s'
   assert_output --partial 'retrying in 5s'
   assert_output --partial 'git fetch merge refspec'
-  assert_output --partial 'checkout fetch_head'
 
   unstub sleep
   unstub ssh-keyscan
@@ -308,7 +305,6 @@ teardown() {
 
   assert_success
   assert_output --partial 'git fetch commit'
-  assert_output --partial 'checkout commit'
 
   unstub ssh-keyscan
   unstub git
@@ -329,6 +325,27 @@ teardown() {
 
   assert_success
   assert_output --partial 'git fetch commit'
+
+  unstub ssh-keyscan
+  unstub git
+}
+
+@test "Retries checkout after deleting broken remote-tracking ref" {
+  export BUILDKITE_COMMIT="abc123"
+
+  stub ssh-keyscan "* : echo 'keyscan'"
+  stub git \
+    "clean * : echo 'git clean'" \
+    "fetch --depth 1 origin abc123 : echo 'git fetch commit'" \
+    "sparse-checkout set * * : echo 'git sparse-checkout'" \
+    "-c advice.detachedHead=false checkout abc123 : echo 'fatal: bad object refs/remotes/origin/danielj-headless-followup' >&2; exit 1" \
+    "update-ref -d refs/remotes/origin/danielj-headless-followup : echo 'deleted bad ref'" \
+    "-c advice.detachedHead=false checkout abc123 : echo 'checkout commit'"
+
+  run "$PWD"/hooks/checkout
+
+  assert_success
+  assert_output --partial 'Deleting broken remote-tracking ref refs/remotes/origin/danielj-headless-followup'
   assert_output --partial 'checkout commit'
 
   unstub ssh-keyscan

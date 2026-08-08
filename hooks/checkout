@@ -167,6 +167,24 @@ try_fetch_merge_ref() {
   fi
 }
 
+checkout_with_bad_remote_ref_recovery() {
+  local target="$1"
+  local output=""
+
+  if output=$(git -c advice.detachedHead=false checkout "${target}" 2>&1); then
+    return 0
+  fi
+
+  printf '%s\n' "${output}" >&2
+  if [[ "${output}" =~ fatal:\ bad\ object\ (refs/remotes/[^[:space:]]+) ]]; then
+    log_warning "Deleting broken remote-tracking ref ${BASH_REMATCH[1]} and retrying checkout"
+    git update-ref -d "${BASH_REMATCH[1]}" 2>/dev/null || return 1
+    git -c advice.detachedHead=false checkout "${target}"
+  else
+    return 1
+  fi
+}
+
 # Determine if we should use the pull request merge refspec
 USE_MERGE_REFSPEC="false"
 if [[ "${BUILDKITE_PULL_REQUEST_USING_MERGE_REFSPEC:-false}" = "true" ]] \
@@ -242,12 +260,12 @@ else
   log_info "Checking out ${BUILDKITE_COMMIT}"
 fi
 if [[ "${USE_MERGE_REFSPEC}" = "true" ]] || [[ ${BUILDKITE_COMMIT} = "HEAD" ]]; then
-  if ! git -c advice.detachedHead=false checkout FETCH_HEAD; then
+  if ! checkout_with_bad_remote_ref_recovery FETCH_HEAD; then
     log_error "Failed to checkout FETCH_HEAD"
     exit 1
   fi
 else
-  if ! git -c advice.detachedHead=false checkout "${BUILDKITE_COMMIT}"; then
+  if ! checkout_with_bad_remote_ref_recovery "${BUILDKITE_COMMIT}"; then
     log_error "Failed to checkout ${BUILDKITE_COMMIT}"
     exit 1
   fi
